@@ -84,6 +84,13 @@
               代理: {{ proxyLabel }}
             </span>
           </div>
+          <div
+            v-if="hasStatusWarning"
+            class="mt-2 rounded-md border border-red-200/70 bg-red-50/70 px-2 py-1 text-xs text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-300"
+            :title="statusMessage"
+          >
+            上次请求错误: {{ statusMessage }}
+          </div>
         </div>
       </div>
     </div>
@@ -262,6 +269,8 @@ import { useQuota } from '@/composables/useQuota'
 import { useAuthStatsStore } from '@/stores/authStats'
 import { formatUnixTimestamp, formatDateOnly } from '@/utils/format'
 
+const HEALTHY_STATUS_MESSAGES = new Set(['ok', 'healthy', 'ready', 'success', 'available'])
+
 const props = defineProps<{
   file: AuthFileItem
   toggling?: boolean
@@ -361,6 +370,18 @@ const proxyLabel = computed(() => {
   const raw = (props.file as any).proxy_url ?? (props.file as any).proxyUrl
   if (typeof raw !== 'string') return ''
   return maskProxyUrl(raw)
+})
+
+const statusMessage = computed(() => {
+  const raw = props.file.status_message ?? props.file.statusMessage
+  if (typeof raw !== 'string') return ''
+  return raw.trim()
+})
+
+const hasStatusWarning = computed(() => {
+  const msg = statusMessage.value
+  if (!msg) return false
+  return !HEALTHY_STATUS_MESSAGES.has(msg.toLowerCase())
 })
 
 function onToggleEnabled(enabled: boolean) {

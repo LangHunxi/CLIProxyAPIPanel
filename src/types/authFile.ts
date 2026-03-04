@@ -32,6 +32,7 @@ export interface AuthFileItem {
   modtime?: number | string;
   status?: string;
   status_message?: string;
+  statusMessage?: string;
   updated_at?: string;
   created_at?: string;
   [key: string]: any;
