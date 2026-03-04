@@ -353,6 +353,65 @@ import {
 } from 'lucide-vue-next'
 import { formatUnixTimestamp, formatDateOnly } from '@/utils/format'
 import { MAX_AUTH_FILE_SIZE } from '@/utils/constants'
+import type { ApiError } from '@/types'
+
+type ModelItem = { id: string; display_name?: string; type?: string }
+
+const MODEL_DEFINITION_PROVIDER_TYPES = new Set(['qwen', 'iflow'])
+
+const normalizeProviderType = (value?: string) => (value || '').trim().toLowerCase()
+
+const isNotFoundError = (error: unknown): boolean => {
+  const status = (error as ApiError | undefined)?.status
+  if (status === 404) return true
+  const message = error instanceof Error ? error.message.toLowerCase() : ''
+  return message.includes('404') || message.includes('not found')
+}
+
+const normalizeModelItems = (models: unknown): ModelItem[] => {
+  if (!Array.isArray(models)) return []
+  return models
+    .map((model) => {
+      if (!model || typeof model !== 'object') return null
+      const item = model as Record<string, unknown>
+      const id = item.id ?? item.name ?? item.model
+      if (!id) return null
+      const displayNameRaw = item.display_name ?? item.displayName
+      const typeRaw = item.type
+      return {
+        id: String(id),
+        display_name: displayNameRaw ? String(displayNameRaw) : undefined,
+        type: typeRaw ? String(typeRaw) : undefined
+      } as ModelItem
+    })
+    .filter((item): item is ModelItem => Boolean(item))
+}
+
+const dedupeModelItems = (models: ModelItem[]): ModelItem[] => {
+  const seen = new Set<string>()
+  const list: ModelItem[] = []
+  for (const model of models) {
+    const key = model.id.trim().toLowerCase()
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    list.push(model)
+  }
+  return list
+}
+
+async function fetchModelsByAuthFile(name: string): Promise<ModelItem[]> {
+  const data = await apiClient.get<{ models?: unknown }>(
+    `/auth-files/models?name=${encodeURIComponent(name)}`
+  )
+  return normalizeModelItems(data?.models)
+}
+
+async function fetchModelsByProvider(providerType: string): Promise<ModelItem[]> {
+  const data = await apiClient.get<{ models?: unknown }>(
+    `/model-definitions/${encodeURIComponent(providerType)}`
+  )
+  return normalizeModelItems(data?.models)
+}
 
 const { toast } = useToast()
 const { confirmDanger, confirmWarning } = useConfirm()
@@ -375,8 +434,9 @@ const pageError = ref<string | null>(null)
 const modelsModalOpen = ref(false)
 const modelsLoading = ref(false)
 const modelsError = ref<string | null>(null)
-const modelsList = ref<{ id: string; display_name?: string; type?: string }[]>([])
+const modelsList = ref<ModelItem[]>([])
 const modelsFileName = ref('')
+const modelsFileType = ref('')
 
 // Info modal state
 const infoModalOpen = ref(false)
@@ -753,23 +813,35 @@ async function showModelsModal(file: AuthFileItem) {
   modelsError.value = null
   modelsList.value = []
   modelsFileName.value = file.name
+  modelsFileType.value = normalizeProviderType(file.type || file.provider || '')
 
   try {
-    const data = await apiClient.get<{ models: { id: string; display_name?: string; type?: string }[] }>(
-      `/auth-files/models?name=${encodeURIComponent(file.name)}`
-    )
-    const models = data?.models
-    if (Array.isArray(models)) {
-      modelsList.value = models
-    } else {
-      modelsList.value = []
+    const fromAuthFile = await fetchModelsByAuthFile(file.name)
+    const normalizedType = modelsFileType.value
+    let merged = [...fromAuthFile]
+    let providerFetchError: unknown = null
+
+    if (MODEL_DEFINITION_PROVIDER_TYPES.has(normalizedType)) {
+      try {
+        const fromProvider = await fetchModelsByProvider(normalizedType)
+        merged = [...merged, ...fromProvider]
+      } catch (providerErr) {
+        providerFetchError = providerErr
+      }
+    }
+
+    modelsList.value = dedupeModelItems(merged)
+
+    if (providerFetchError && modelsList.value.length === 0 && !isNotFoundError(providerFetchError)) {
+      const providerMessage =
+        providerFetchError instanceof Error ? providerFetchError.message : '获取模型列表失败'
+      modelsError.value = providerMessage || '获取模型列表失败'
     }
   } catch (err) {
-    // Check for 404 (API not supported)
-    const errorMessage = err instanceof Error ? err.message : ''
-    if (errorMessage.includes('404') || errorMessage.includes('not found') || errorMessage.includes('Not Found')) {
+    if (isNotFoundError(err)) {
       modelsError.value = '当前版本不支持此功能，请更新 CLI Proxy API'
     } else {
+      const errorMessage = err instanceof Error ? err.message : ''
       modelsError.value = errorMessage || '获取模型列表失败'
     }
   } finally {

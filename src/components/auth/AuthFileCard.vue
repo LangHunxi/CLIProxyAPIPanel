@@ -48,7 +48,7 @@
             <div class="flex items-center gap-1 sm:gap-2 shrink-0 ml-auto">
               <!-- Actions Buttons -->
               <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all duration-300">
-                <Button v-if="showQuota" variant="ghost" size="icon" class="h-7 w-7 text-muted-foreground hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 hover:scale-110 transition-all duration-200" aria-label="支持模型" title="支持模型" @click="$emit('show-models')">
+                <Button v-if="showModels" variant="ghost" size="icon" class="h-7 w-7 text-muted-foreground hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 hover:scale-110 transition-all duration-200" aria-label="支持模型" title="支持模型" @click="$emit('show-models')">
                   <Bot class="h-3.5 w-3.5" />
                 </Button>
                 <Button variant="ghost" size="icon" class="h-7 w-7 text-muted-foreground hover:text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 hover:scale-110 transition-all duration-200" aria-label="凭证信息" title="凭证信息" @click="$emit('show-info')">
@@ -69,7 +69,7 @@
                 <Switch
                   class="scale-90 origin-right"
                   :model-value="!isDisabled"
-                  :disabled="toggling"
+                  :disabled="isToggling"
                   :title="isDisabled ? '启用凭证' : '禁用凭证'"
                   @update:model-value="onToggleEnabled"
                 />
@@ -327,7 +327,7 @@ const codexPlanBadgeClass = computed(() => {
 })
 
 const isDisabled = computed(() => Boolean(props.file.disabled))
-const toggling = computed(() => Boolean(props.toggling))
+const isToggling = computed(() => Boolean(props.toggling))
 const canToggleDisabled = computed(() => {
   const raw = props.file.runtimeOnly ?? props.file.runtime_only
   if (typeof raw === 'string') {
@@ -589,8 +589,14 @@ onMounted(() => {
 })
 
 // Quota visibility
+const showModels = computed(() => {
+  const type = (props.file.type || props.file.provider || '').toString().toLowerCase()
+  return ['antigravity', 'codex', 'gemini-cli', 'qwen', 'iflow'].includes(type)
+})
+
 const showQuota = computed(() => {
-  return ['antigravity', 'codex', 'gemini-cli'].includes(props.file.type || '')
+  const type = (props.file.type || props.file.provider || '').toString().toLowerCase()
+  return ['antigravity', 'codex', 'gemini-cli'].includes(type)
 })
 
 // Progress bar colors
