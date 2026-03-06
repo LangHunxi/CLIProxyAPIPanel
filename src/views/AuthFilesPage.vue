@@ -139,6 +139,7 @@
         :show-remove-invalid-action="true"
         :remove-invalid-loading="removingInvalidCodex"
         :remove-invalid-progress="removeInvalidCodexProgress"
+        @close-remove-invalid-progress="closeRemoveInvalidCodexProgress"
         @download="downloadFile"
         @delete="deleteFile"
         @show-models="showModelsModal"
@@ -421,11 +422,11 @@ const currentFilter = ref('all')
 const authFileToggling = ref<Record<string, boolean>>({})
 const removingInvalidCodex = ref(false)
 
-const CODEX_INVALID_SCAN_CONCURRENCY = 6
+const CODEX_INVALID_SCAN_CONCURRENCY = 50
 const CODEX_INVALID_DELETE_CONCURRENCY = 6
 
 type RemoveInvalidProgressState = {
-  phase: 'idle' | 'scanning' | 'deleting' | 'done'
+  phase: 'idle' | 'scanning' | 'deleting' | 'done' | 'stopped'
   total: number
   processed: number
   running: number
@@ -437,6 +438,7 @@ type RemoveInvalidProgressState = {
   deleteFailed: number
   current: string
   percent: number
+  stopRequested: boolean
 }
 
 const removeInvalidCodexProgress = ref<RemoveInvalidProgressState>({
@@ -452,6 +454,7 @@ const removeInvalidCodexProgress = ref<RemoveInvalidProgressState>({
   deleteFailed: 0,
   current: '',
   percent: 0,
+  stopRequested: false,
 })
 
 // Page-level error (keep UI visible even when API calls fail)
@@ -724,6 +727,7 @@ function resetRemoveInvalidCodexProgress() {
     deleteFailed: 0,
     current: '',
     percent: 0,
+    stopRequested: false,
   }
 }
 
@@ -742,6 +746,7 @@ async function mapWithConcurrency<TItem, TResult>(
   items: TItem[],
   concurrency: number,
   worker: (item: TItem, index: number) => Promise<TResult>,
+  shouldStop?: () => boolean,
 ): Promise<TResult[]> {
   const normalizedConcurrency = Math.max(1, Math.min(concurrency, items.length || 1))
   const results = new Array<TResult>(items.length)
@@ -749,6 +754,7 @@ async function mapWithConcurrency<TItem, TResult>(
 
   const runners = Array.from({ length: normalizedConcurrency }, async () => {
     while (true) {
+      if (shouldStop?.()) return
       const currentIndex = nextIndex
       nextIndex += 1
       if (currentIndex >= items.length) return
@@ -890,6 +896,21 @@ function extractCodexInvalidReasonFromPayload(payload: Record<string, unknown>):
   return null
 }
 
+function requestStopRemoveInvalidCodexProgress() {
+  if (removeInvalidCodexProgress.value.phase === 'idle') return
+  removeInvalidCodexProgress.value.stopRequested = true
+}
+
+function closeRemoveInvalidCodexProgress() {
+  const phase = removeInvalidCodexProgress.value.phase
+  if (phase === 'idle') return
+  if (phase === 'scanning' || phase === 'deleting') {
+    requestStopRemoveInvalidCodexProgress()
+    return
+  }
+  resetRemoveInvalidCodexProgress()
+}
+
 async function validateCodexCredentialByContent(file: AuthFileItem): Promise<CodexInvalidCheckResult> {
   try {
     const response = await apiClient.getRaw(`/auth-files/download?name=${encodeURIComponent(file.name)}`)
@@ -935,6 +956,7 @@ async function removeInvalidCodexCredentials(sectionFiles: AuthFileItem[]) {
     deleteFailed: 0,
     current: '',
     percent: 0,
+    stopRequested: false,
   }
 
   try {
@@ -949,7 +971,7 @@ async function removeInvalidCodexCredentials(sectionFiles: AuthFileItem[]) {
           const result = await validateCodexCredentialByContent(file)
           if (result.invalid) {
             removeInvalidCodexProgress.value.invalid += 1
-          } else if (result.reason) {
+          } else if (result.reason && result.reason !== 'stopped') {
             removeInvalidCodexProgress.value.uncertain += 1
           }
           return result
@@ -959,20 +981,32 @@ async function removeInvalidCodexCredentials(sectionFiles: AuthFileItem[]) {
           updateRemoveInvalidPercent()
         }
       },
+      () => removeInvalidCodexProgress.value.stopRequested,
     )
 
-    const invalidItems = validationResults.filter((item) => item.invalid)
-    const uncertainCount = validationResults.filter((item) => !item.invalid && item.reason).length
+    const invalidItems = validationResults.filter((item) => item?.invalid)
+    const uncertainCount = validationResults.filter((item) => !item?.invalid && item?.reason && item.reason !== 'stopped').length
+    const stoppedAfterScan = removeInvalidCodexProgress.value.stopRequested
 
     if (invalidItems.length === 0) {
-      removeInvalidCodexProgress.value.phase = 'done'
+      removeInvalidCodexProgress.value.phase = stoppedAfterScan ? 'stopped' : 'done'
       removeInvalidCodexProgress.value.current = ''
       updateRemoveInvalidPercent()
       toast({
-        title: '扫描完成：未发现可明确删除的失效 Codex 凭证',
+        title: stoppedAfterScan ? '批量清理已停止' : '扫描完成：未发现可明确删除的失效 Codex 凭证',
         description: uncertainCount > 0 ? `有 ${uncertainCount} 个凭证读取异常或无法仅凭文件内容确认，已跳过。` : undefined,
       })
-      window.setTimeout(resetRemoveInvalidCodexProgress, 2500)
+      return
+    }
+
+    if (stoppedAfterScan) {
+      removeInvalidCodexProgress.value.phase = 'stopped'
+      removeInvalidCodexProgress.value.current = ''
+      updateRemoveInvalidPercent()
+      toast({
+        title: '批量清理已停止',
+        description: `已扫描 ${removeInvalidCodexProgress.value.processed} 个凭证，识别到 ${invalidItems.length} 个失效项，未继续删除。`,
+      })
       return
     }
 
@@ -991,34 +1025,38 @@ async function removeInvalidCodexCredentials(sectionFiles: AuthFileItem[]) {
         try {
           await apiClient.delete(`/auth-files?name=${encodeURIComponent(item.file.name)}`)
           removeInvalidCodexProgress.value.deleted += 1
-          return { ok: true as const, item }
+          return { ok: true as const, item, skipped: false as const }
         } catch {
           removeInvalidCodexProgress.value.deleteFailed += 1
-          return { ok: false as const, item }
+          return { ok: false as const, item, skipped: false as const }
         } finally {
           removeInvalidCodexProgress.value.running = Math.max(0, removeInvalidCodexProgress.value.running - 1)
           removeInvalidCodexProgress.value.deleteProcessed += 1
           updateRemoveInvalidPercent()
         }
       },
+      () => removeInvalidCodexProgress.value.stopRequested,
     )
 
-    const deleted = deleteResults.filter((result) => result.ok).length
-    const deleteFailed = deleteResults.length - deleted
+    const deleted = deleteResults.filter((result) => result?.ok).length
+    const deleteFailed = deleteResults.filter((result) => result && !result.ok).length
     const invalidPreview = invalidItems
       .slice(0, 3)
       .map((item) => `${item.file.name}${item.reason ? `（${item.reason}）` : ''}`)
       .join('、')
 
-    removeInvalidCodexProgress.value.phase = 'done'
+    const stoppedDuringDelete = removeInvalidCodexProgress.value.stopRequested
+    const skippedDeletes = Math.max(0, invalidItems.length - removeInvalidCodexProgress.value.deleteProcessed)
+
+    removeInvalidCodexProgress.value.phase = stoppedDuringDelete ? 'stopped' : 'done'
     removeInvalidCodexProgress.value.current = ''
     updateRemoveInvalidPercent()
 
     if (deleted > 0) {
       toast({
-        title: `已删除 ${deleted} 个失效 Codex 凭证`,
+        title: stoppedDuringDelete ? `已停止，已删除 ${deleted} 个失效 Codex 凭证` : `已删除 ${deleted} 个失效 Codex 凭证`,
         description: invalidPreview
-          ? `识别结果示例：${invalidPreview}${invalidItems.length > 3 ? '…' : ''}${uncertainCount > 0 ? `；另有 ${uncertainCount} 个未确定项已跳过` : ''}`
+          ? `识别结果示例：${invalidPreview}${invalidItems.length > 3 ? '…' : ''}${uncertainCount > 0 ? `；另有 ${uncertainCount} 个未确定项已跳过` : ''}${skippedDeletes > 0 ? `；还有 ${skippedDeletes} 个待删项因停止而未执行` : ''}`
           : undefined,
       })
       await fetchFiles()
@@ -1032,12 +1070,17 @@ async function removeInvalidCodexCredentials(sectionFiles: AuthFileItem[]) {
       })
     } else if (deleted === 0 && uncertainCount > 0) {
       toast({
-        title: '未删除任何凭证',
-        description: `有 ${uncertainCount} 个凭证无法仅根据文件内容确认是否失效，已全部跳过。`,
+        title: stoppedDuringDelete ? '批量清理已停止' : '未删除任何凭证',
+        description: stoppedDuringDelete
+          ? `停止前未完成删除，另有 ${uncertainCount} 个凭证无法仅根据文件内容确认是否失效。`
+          : `有 ${uncertainCount} 个凭证无法仅根据文件内容确认是否失效，已全部跳过。`,
+      })
+    } else if (stoppedDuringDelete && skippedDeletes > 0) {
+      toast({
+        title: '批量清理已停止',
+        description: `还有 ${skippedDeletes} 个待删项未执行，你可以稍后继续处理。`,
       })
     }
-
-    window.setTimeout(resetRemoveInvalidCodexProgress, 4000)
   } finally {
     removingInvalidCodex.value = false
   }

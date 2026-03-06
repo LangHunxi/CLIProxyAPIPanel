@@ -62,18 +62,47 @@
       v-if="removeInvalidProgress && removeInvalidProgress.phase !== 'idle'"
       class="mb-4 rounded-lg border border-border/70 bg-background/60 p-3"
     >
-      <div class="flex flex-wrap items-center justify-between gap-2 text-xs">
-        <div class="font-medium text-foreground">
-          {{ removeInvalidProgress.phase === 'deleting' ? '正在删除失效凭证' : removeInvalidProgress.phase === 'done' ? '批量清理完成' : '正在扫描凭证内容' }}
+      <div class="flex flex-wrap items-start justify-between gap-2 text-xs">
+        <div>
+          <div class="font-medium text-foreground">
+            {{
+              removeInvalidProgress.phase === 'deleting'
+                ? (removeInvalidProgress.stopRequested ? '正在停止删除任务…' : '正在删除失效凭证')
+                : removeInvalidProgress.phase === 'done'
+                  ? '批量清理完成'
+                  : removeInvalidProgress.phase === 'stopped'
+                    ? '批量清理已停止'
+                    : (removeInvalidProgress.stopRequested ? '正在停止扫描任务…' : '正在扫描凭证内容')
+            }}
+          </div>
+          <div class="mt-1 text-muted-foreground">
+            当前：{{ removeInvalidProgress.current || '—' }}
+          </div>
         </div>
-        <div class="text-muted-foreground">
-          当前：{{ removeInvalidProgress.current || '—' }}
-        </div>
+
+        <Button
+          variant="ghost"
+          size="sm"
+          class="h-7 px-2 text-muted-foreground hover:text-foreground"
+          :disabled="removeInvalidProgress.stopRequested && !['done', 'stopped'].includes(removeInvalidProgress.phase)"
+          @click="emit('close-remove-invalid-progress')"
+        >
+          <X class="mr-1 h-3.5 w-3.5" />
+          {{ ['done', 'stopped'].includes(removeInvalidProgress.phase) ? '关闭' : removeInvalidProgress.stopRequested ? '停止中' : '停止' }}
+        </Button>
+      </div>
+
+      <div
+        v-if="removeInvalidProgress.stopRequested && !['done', 'stopped'].includes(removeInvalidProgress.phase)"
+        class="mt-2 text-xs text-amber-600 dark:text-amber-400"
+      >
+        已请求停止，等待当前运行中的任务收尾，不会继续启动新的扫描/删除。
       </div>
 
       <div class="mt-2 h-2 overflow-hidden rounded-full bg-muted">
         <div
-          class="h-full rounded-full bg-primary transition-all duration-300"
+          class="h-full rounded-full transition-all duration-300"
+          :class="removeInvalidProgress.phase === 'stopped' ? 'bg-amber-500' : 'bg-primary'"
           :style="{ width: `${removeInvalidProgress.percent}%` }"
         />
       </div>
@@ -90,6 +119,10 @@
         <div>删除进度：{{ removeInvalidProgress.deleteProcessed }}/{{ removeInvalidProgress.deleteTotal }}</div>
         <div>已删除：{{ removeInvalidProgress.deleted }}</div>
         <div>删除失败：{{ removeInvalidProgress.deleteFailed }}</div>
+      </div>
+
+      <div class="mt-1 text-xs text-muted-foreground">
+        状态：{{ removeInvalidProgress.stopRequested ? '已请求停止' : '运行中' }}
       </div>
     </div>
 
@@ -146,7 +179,7 @@ import { ref, computed, watch } from 'vue'
 import CardSection from '@/components/layout/CardSection.vue'
 import Button from '@/components/ui/button.vue'
 import AuthFileCard from '@/components/auth/AuthFileCard.vue'
-import { RefreshCw } from 'lucide-vue-next'
+import { RefreshCw, X } from 'lucide-vue-next'
 import type { AuthFileItem } from '@/types'
 
 const props = defineProps<{
@@ -157,7 +190,7 @@ const props = defineProps<{
   showRemoveInvalidAction?: boolean
   removeInvalidLoading?: boolean
   removeInvalidProgress?: {
-    phase: 'idle' | 'scanning' | 'deleting' | 'done'
+    phase: 'idle' | 'scanning' | 'deleting' | 'done' | 'stopped'
     total: number
     processed: number
     running: number
@@ -169,6 +202,7 @@ const props = defineProps<{
     deleteFailed: number
     current: string
     percent: number
+    stopRequested: boolean
   } | null
 }>()
 
@@ -181,6 +215,7 @@ const emit = defineEmits<{
   (e: 'refresh', files: AuthFileItem[]): void
   (e: 'toggle-disabled', payload: { file: AuthFileItem; disabled: boolean }): void
   (e: 'remove-invalid', files: AuthFileItem[]): void
+  (e: 'close-remove-invalid-progress'): void
 }>()
 
 const viewMode = ref<'paged' | 'all'>('paged')
