@@ -58,6 +58,41 @@
       </div>
     </div>
 
+    <div
+      v-if="removeInvalidProgress && removeInvalidProgress.phase !== 'idle'"
+      class="mb-4 rounded-lg border border-border/70 bg-background/60 p-3"
+    >
+      <div class="flex flex-wrap items-center justify-between gap-2 text-xs">
+        <div class="font-medium text-foreground">
+          {{ removeInvalidProgress.phase === 'deleting' ? '正在删除失效凭证' : removeInvalidProgress.phase === 'done' ? '批量清理完成' : '正在扫描凭证内容' }}
+        </div>
+        <div class="text-muted-foreground">
+          当前：{{ removeInvalidProgress.current || '—' }}
+        </div>
+      </div>
+
+      <div class="mt-2 h-2 overflow-hidden rounded-full bg-muted">
+        <div
+          class="h-full rounded-full bg-primary transition-all duration-300"
+          :style="{ width: `${removeInvalidProgress.percent}%` }"
+        />
+      </div>
+
+      <div class="mt-2 grid gap-1 text-xs text-muted-foreground sm:grid-cols-2 lg:grid-cols-4">
+        <div>进度：{{ removeInvalidProgress.processed }}/{{ removeInvalidProgress.total }}</div>
+        <div>剩余：{{ Math.max(0, removeInvalidProgress.total - removeInvalidProgress.processed) }}</div>
+        <div>运行中：{{ removeInvalidProgress.running }}</div>
+        <div>识别失效：{{ removeInvalidProgress.invalid }}</div>
+      </div>
+
+      <div class="mt-1 grid gap-1 text-xs text-muted-foreground sm:grid-cols-2 lg:grid-cols-4">
+        <div>未确定：{{ removeInvalidProgress.uncertain }}</div>
+        <div>删除进度：{{ removeInvalidProgress.deleteProcessed }}/{{ removeInvalidProgress.deleteTotal }}</div>
+        <div>已删除：{{ removeInvalidProgress.deleted }}</div>
+        <div>删除失败：{{ removeInvalidProgress.deleteFailed }}</div>
+      </div>
+    </div>
+
     <!-- Empty State -->
     <div v-if="files.length === 0" class="py-8 text-center text-muted-foreground">
       暂无文件
@@ -121,6 +156,20 @@ const props = defineProps<{
   togglingMap?: Record<string, boolean>
   showRemoveInvalidAction?: boolean
   removeInvalidLoading?: boolean
+  removeInvalidProgress?: {
+    phase: 'idle' | 'scanning' | 'deleting' | 'done'
+    total: number
+    processed: number
+    running: number
+    invalid: number
+    uncertain: number
+    deleteTotal: number
+    deleteProcessed: number
+    deleted: number
+    deleteFailed: number
+    current: string
+    percent: number
+  } | null
 }>()
 
 const emit = defineEmits<{

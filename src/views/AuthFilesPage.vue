@@ -138,6 +138,7 @@
         :toggling-map="authFileToggling"
         :show-remove-invalid-action="true"
         :remove-invalid-loading="removingInvalidCodex"
+        :remove-invalid-progress="removeInvalidCodexProgress"
         @download="downloadFile"
         @delete="deleteFile"
         @show-models="showModelsModal"
@@ -323,7 +324,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, provide, reactive } from 'vue'
 import { apiClient } from '@/api/client'
-import { apiCallApi, getApiCallErrorMessage } from '@/api/apiCall'
 import { useToast } from '@/composables/useToast'
 import { useConfirm } from '@/composables/useConfirm'
 import { useClipboard } from '@/composables/useClipboard'
@@ -337,12 +337,6 @@ import Dialog from '@/components/ui/dialog/Dialog.vue'
 import Input from '@/components/ui/input.vue'
 import AuthFileSection from '@/components/auth/AuthFileSection.vue'
 import type { AuthFileItem, AuthFilesResponse } from '@/types'
-import {
-  CODEX_REQUEST_HEADERS,
-  CODEX_USAGE_URL,
-  normalizeAuthIndexValue,
-  resolveCodexChatgptAccountId,
-} from '@/utils/quota'
 import {
   FileText,
   Upload,
@@ -426,6 +420,39 @@ const searchQuery = ref('')
 const currentFilter = ref('all')
 const authFileToggling = ref<Record<string, boolean>>({})
 const removingInvalidCodex = ref(false)
+
+const CODEX_INVALID_SCAN_CONCURRENCY = 6
+const CODEX_INVALID_DELETE_CONCURRENCY = 6
+
+type RemoveInvalidProgressState = {
+  phase: 'idle' | 'scanning' | 'deleting' | 'done'
+  total: number
+  processed: number
+  running: number
+  invalid: number
+  uncertain: number
+  deleteTotal: number
+  deleteProcessed: number
+  deleted: number
+  deleteFailed: number
+  current: string
+  percent: number
+}
+
+const removeInvalidCodexProgress = ref<RemoveInvalidProgressState>({
+  phase: 'idle',
+  total: 0,
+  processed: 0,
+  running: 0,
+  invalid: 0,
+  uncertain: 0,
+  deleteTotal: 0,
+  deleteProcessed: 0,
+  deleted: 0,
+  deleteFailed: 0,
+  current: '',
+  percent: 0,
+})
 
 // Page-level error (keep UI visible even when API calls fail)
 const pageError = ref<string | null>(null)
@@ -677,6 +704,212 @@ async function deleteFile(name: string) {
   }
 }
 
+type CodexInvalidCheckResult = {
+  file: AuthFileItem
+  invalid: boolean
+  reason?: string
+}
+
+function resetRemoveInvalidCodexProgress() {
+  removeInvalidCodexProgress.value = {
+    phase: 'idle',
+    total: 0,
+    processed: 0,
+    running: 0,
+    invalid: 0,
+    uncertain: 0,
+    deleteTotal: 0,
+    deleteProcessed: 0,
+    deleted: 0,
+    deleteFailed: 0,
+    current: '',
+    percent: 0,
+  }
+}
+
+function updateRemoveInvalidPercent() {
+  const state = removeInvalidCodexProgress.value
+  const total = state.phase === 'deleting' || state.phase === 'done'
+    ? Math.max(1, state.total + state.deleteTotal)
+    : Math.max(1, state.total)
+  const completed = state.phase === 'deleting' || state.phase === 'done'
+    ? state.processed + state.deleteProcessed
+    : state.processed
+  state.percent = Math.max(0, Math.min(100, Math.round((completed / total) * 100)))
+}
+
+async function mapWithConcurrency<TItem, TResult>(
+  items: TItem[],
+  concurrency: number,
+  worker: (item: TItem, index: number) => Promise<TResult>,
+): Promise<TResult[]> {
+  const normalizedConcurrency = Math.max(1, Math.min(concurrency, items.length || 1))
+  const results = new Array<TResult>(items.length)
+  let nextIndex = 0
+
+  const runners = Array.from({ length: normalizedConcurrency }, async () => {
+    while (true) {
+      const currentIndex = nextIndex
+      nextIndex += 1
+      if (currentIndex >= items.length) return
+      results[currentIndex] = await worker(items[currentIndex], currentIndex)
+    }
+  })
+
+  await Promise.all(runners)
+  return results
+}
+
+function normalizeString(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  return trimmed || null
+}
+
+function pickFirstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    const normalized = normalizeString(value)
+    if (normalized) return normalized
+  }
+  return null
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  return value as Record<string, unknown>
+}
+
+function parseJwtPayload(token: unknown): Record<string, unknown> | null {
+  const raw = normalizeString(token)
+  if (!raw) return null
+
+  try {
+    const parsed = JSON.parse(raw)
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>
+    }
+  } catch {
+    // not json, continue with jwt parsing
+  }
+
+  const parts = raw.split('.')
+  if (parts.length < 2) return null
+
+  try {
+    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/')
+    const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, '=')
+    const decoded = atob(padded)
+    const parsed = JSON.parse(decoded)
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>
+    }
+  } catch {
+    return null
+  }
+
+  return null
+}
+
+function extractCodexInvalidReasonFromPayload(payload: Record<string, unknown>): string | null {
+  const metadata = asRecord(payload.metadata)
+  const attributes = asRecord(payload.attributes)
+  const auth = asRecord(payload.auth)
+  const authStatus = asRecord(payload.auth_status ?? payload.authStatus)
+  const lastError = asRecord(payload.last_error ?? payload.lastError)
+  const tokenPayloads = [
+    parseJwtPayload(payload.id_token),
+    parseJwtPayload(metadata?.id_token),
+    parseJwtPayload(attributes?.id_token),
+  ].filter((item): item is Record<string, unknown> => Boolean(item))
+
+  const directFlags = [
+    payload.token_invalidated,
+    payload.invalidated,
+    payload.revoked,
+    metadata?.token_invalidated,
+    metadata?.invalidated,
+    metadata?.revoked,
+    attributes?.token_invalidated,
+    attributes?.invalidated,
+    attributes?.revoked,
+  ]
+
+  if (directFlags.some((value) => value === true || value === 'true')) {
+    return 'token_invalidated'
+  }
+
+  const statusCandidates = [
+    payload.status,
+    payload.status_message,
+    payload.statusMessage,
+    payload.error,
+    payload.error_code,
+    payload.errorCode,
+    metadata?.status,
+    metadata?.status_message,
+    metadata?.statusMessage,
+    metadata?.error,
+    metadata?.error_code,
+    metadata?.errorCode,
+    attributes?.status,
+    attributes?.status_message,
+    attributes?.statusMessage,
+    attributes?.error,
+    attributes?.error_code,
+    attributes?.errorCode,
+    auth?.status,
+    authStatus?.status,
+    authStatus?.code,
+    lastError?.code,
+    lastError?.message,
+    ...tokenPayloads.flatMap((item) => [item.status, item.error, item.error_code, item.errorCode]),
+  ]
+
+  for (const candidate of statusCandidates) {
+    const text = normalizeString(candidate)?.toLowerCase()
+    if (!text) continue
+    if (text.includes('token_invalidated')) return 'token_invalidated'
+    if (text.includes('invalid_grant')) return 'invalid_grant'
+    if (text.includes('unauthorized')) return 'unauthorized'
+    if (text.includes('401')) return '401'
+    if (text.includes('revoked')) return 'revoked'
+    if (text.includes('expired')) return 'expired'
+    if (text.includes('invalid') && text.includes('token')) return text
+  }
+
+  const criticalFields = [
+    pickFirstString(payload.access_token, metadata?.access_token, attributes?.access_token),
+    pickFirstString(payload.refresh_token, metadata?.refresh_token, attributes?.refresh_token),
+    pickFirstString(payload.id_token, metadata?.id_token, attributes?.id_token),
+  ]
+
+  if (criticalFields.every((value) => !value)) {
+    return '凭证内容缺少 access_token / refresh_token / id_token'
+  }
+
+  return null
+}
+
+async function validateCodexCredentialByContent(file: AuthFileItem): Promise<CodexInvalidCheckResult> {
+  try {
+    const response = await apiClient.getRaw(`/auth-files/download?name=${encodeURIComponent(file.name)}`)
+    const payload = coerceJsonObject(response.data)
+    if (!payload) {
+      return { file, invalid: true, reason: '凭证文件内容无法解析为 JSON' }
+    }
+
+    const reason = extractCodexInvalidReasonFromPayload(payload)
+    if (reason) {
+      return { file, invalid: true, reason }
+    }
+
+    return { file, invalid: false }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : '读取凭证文件失败'
+    return { file, invalid: false, reason: message }
+  }
+}
+
 async function removeInvalidCodexCredentials(sectionFiles: AuthFileItem[]) {
   if (removingInvalidCodex.value) return
 
@@ -686,76 +919,106 @@ async function removeInvalidCodexCredentials(sectionFiles: AuthFileItem[]) {
     return
   }
 
-  if (!await confirmWarning(`将校验 ${codexTargets.length} 个 Codex 凭证，并批量删除失效项，是否继续？`)) return
+  if (!await confirmWarning(`将扫描 ${codexTargets.length} 个 Codex 凭证文件内容，并批量删除可明确识别为失效的项，是否继续？`)) return
 
   removingInvalidCodex.value = true
+  removeInvalidCodexProgress.value = {
+    phase: 'scanning',
+    total: codexTargets.length,
+    processed: 0,
+    running: 0,
+    invalid: 0,
+    uncertain: 0,
+    deleteTotal: 0,
+    deleteProcessed: 0,
+    deleted: 0,
+    deleteFailed: 0,
+    current: '',
+    percent: 0,
+  }
+
   try {
-    const validationResults = await Promise.all(
-      codexTargets.map(async (file) => {
-        const rawAuthIndex = file.authIndex ?? (file as Record<string, unknown>)['auth_index']
-        const authIndex = normalizeAuthIndexValue(rawAuthIndex)
-        const accountId = resolveCodexChatgptAccountId(file)
-
-        if (!authIndex) {
-          return { file, valid: false as const, reason: '缺少认证索引' }
-        }
-        if (!accountId) {
-          return { file, valid: false as const, reason: '缺少 ChatGPT 账户 ID' }
-        }
-
+    const validationResults = await mapWithConcurrency(
+      codexTargets,
+      CODEX_INVALID_SCAN_CONCURRENCY,
+      async (file) => {
+        removeInvalidCodexProgress.value.running += 1
+        removeInvalidCodexProgress.value.current = file.name
+        updateRemoveInvalidPercent()
         try {
-          // 使用 Codex 配额接口做校验（与“刷新配额”一致）：报错则记录为失效
-          const response = await apiCallApi.request({
-            authIndex,
-            method: 'GET',
-            url: CODEX_USAGE_URL,
-            header: {
-              ...CODEX_REQUEST_HEADERS,
-              'Chatgpt-Account-Id': accountId,
-            },
-          })
-
-          if (response.statusCode < 200 || response.statusCode >= 300) {
-            return {
-              file,
-              valid: false as const,
-              reason: getApiCallErrorMessage(response),
-            }
+          const result = await validateCodexCredentialByContent(file)
+          if (result.invalid) {
+            removeInvalidCodexProgress.value.invalid += 1
+          } else if (result.reason) {
+            removeInvalidCodexProgress.value.uncertain += 1
           }
-
-          return { file, valid: true as const }
-        } catch (err) {
-          const message = err instanceof Error ? err.message : '校验失败'
-          return { file, valid: false as const, reason: message }
+          return result
+        } finally {
+          removeInvalidCodexProgress.value.running = Math.max(0, removeInvalidCodexProgress.value.running - 1)
+          removeInvalidCodexProgress.value.processed += 1
+          updateRemoveInvalidPercent()
         }
-      })
+      },
     )
 
-    const invalidItems = validationResults.filter((item) => !item.valid)
+    const invalidItems = validationResults.filter((item) => item.invalid)
+    const uncertainCount = validationResults.filter((item) => !item.invalid && item.reason).length
 
     if (invalidItems.length === 0) {
-      toast({ title: `校验完成：${codexTargets.length} 个凭证均有效` })
+      removeInvalidCodexProgress.value.phase = 'done'
+      removeInvalidCodexProgress.value.current = ''
+      updateRemoveInvalidPercent()
+      toast({
+        title: '扫描完成：未发现可明确删除的失效 Codex 凭证',
+        description: uncertainCount > 0 ? `有 ${uncertainCount} 个凭证读取异常或无法仅凭文件内容确认，已跳过。` : undefined,
+      })
+      window.setTimeout(resetRemoveInvalidCodexProgress, 2500)
       return
     }
 
-    const deleteResults = await Promise.allSettled(
-      invalidItems.map((item) =>
-        apiClient.delete(`/auth-files?name=${encodeURIComponent(item.file.name)}`)
-      )
+    removeInvalidCodexProgress.value.phase = 'deleting'
+    removeInvalidCodexProgress.value.deleteTotal = invalidItems.length
+    removeInvalidCodexProgress.value.current = ''
+    updateRemoveInvalidPercent()
+
+    const deleteResults = await mapWithConcurrency(
+      invalidItems,
+      CODEX_INVALID_DELETE_CONCURRENCY,
+      async (item) => {
+        removeInvalidCodexProgress.value.running += 1
+        removeInvalidCodexProgress.value.current = item.file.name
+        updateRemoveInvalidPercent()
+        try {
+          await apiClient.delete(`/auth-files?name=${encodeURIComponent(item.file.name)}`)
+          removeInvalidCodexProgress.value.deleted += 1
+          return { ok: true as const, item }
+        } catch {
+          removeInvalidCodexProgress.value.deleteFailed += 1
+          return { ok: false as const, item }
+        } finally {
+          removeInvalidCodexProgress.value.running = Math.max(0, removeInvalidCodexProgress.value.running - 1)
+          removeInvalidCodexProgress.value.deleteProcessed += 1
+          updateRemoveInvalidPercent()
+        }
+      },
     )
 
-    const deleted = deleteResults.filter((r) => r.status === 'fulfilled').length
+    const deleted = deleteResults.filter((result) => result.ok).length
     const deleteFailed = deleteResults.length - deleted
     const invalidPreview = invalidItems
       .slice(0, 3)
       .map((item) => `${item.file.name}${item.reason ? `（${item.reason}）` : ''}`)
       .join('、')
 
+    removeInvalidCodexProgress.value.phase = 'done'
+    removeInvalidCodexProgress.value.current = ''
+    updateRemoveInvalidPercent()
+
     if (deleted > 0) {
       toast({
         title: `已删除 ${deleted} 个失效 Codex 凭证`,
         description: invalidPreview
-          ? `校验失败示例：${invalidPreview}${invalidItems.length > 3 ? '…' : ''}`
+          ? `识别结果示例：${invalidPreview}${invalidItems.length > 3 ? '…' : ''}${uncertainCount > 0 ? `；另有 ${uncertainCount} 个未确定项已跳过` : ''}`
           : undefined,
       })
       await fetchFiles()
@@ -764,9 +1027,17 @@ async function removeInvalidCodexCredentials(sectionFiles: AuthFileItem[]) {
     if (deleteFailed > 0) {
       toast({
         title: `有 ${deleteFailed} 个失效凭证删除失败`,
+        description: uncertainCount > 0 ? `另外有 ${uncertainCount} 个未确定项未处理。` : undefined,
         variant: 'destructive',
       })
+    } else if (deleted === 0 && uncertainCount > 0) {
+      toast({
+        title: '未删除任何凭证',
+        description: `有 ${uncertainCount} 个凭证无法仅根据文件内容确认是否失效，已全部跳过。`,
+      })
     }
+
+    window.setTimeout(resetRemoveInvalidCodexProgress, 4000)
   } finally {
     removingInvalidCodex.value = false
   }
