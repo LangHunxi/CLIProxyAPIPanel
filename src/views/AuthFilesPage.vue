@@ -133,7 +133,7 @@
       <AuthFileSection
         v-if="codexFiles.length > 0 && (currentFilter === 'all' || currentFilter === 'codex')"
         title="Codex"
-        :files="searchFilteredFiles(codexFiles)"
+        :files="displayedCodexFiles"
         :section-class="'bg-gradient-to-b from-amber-50/10 to-transparent dark:from-amber-900/10'"
         :toggling-map="authFileToggling"
         :show-remove-invalid-action="true"
@@ -148,7 +148,15 @@
         @refresh="handleSectionRefresh"
         @toggle-disabled="toggleAuthFileDisabled"
         @remove-invalid="removeInvalidCodexCredentials"
-      />
+      >
+        <template #header-controls>
+          <CodexPlanFilterControl
+            :model-value="codexPlanFilter"
+            :options="codexPlanOptions"
+            @update:model-value="codexPlanFilter = $event"
+          />
+        </template>
+      </AuthFileSection>
 
       <!-- Gemini CLI Section -->
       <AuthFileSection
@@ -337,6 +345,7 @@ import Button from '@/components/ui/button.vue'
 import Dialog from '@/components/ui/dialog/Dialog.vue'
 import Input from '@/components/ui/input.vue'
 import AuthFileSection from '@/components/auth/AuthFileSection.vue'
+import CodexPlanFilterControl from '@/components/auth/CodexPlanFilterControl.vue'
 import type { AuthFileItem, AuthFilesResponse } from '@/types'
 import {
   FileText,
@@ -348,6 +357,11 @@ import {
 } from 'lucide-vue-next'
 import { formatUnixTimestamp, formatDateOnly } from '@/utils/format'
 import { MAX_AUTH_FILE_SIZE } from '@/utils/constants'
+import {
+  CODEX_PLAN_FILTER_ALL,
+  CODEX_PLAN_FILTER_UNKNOWN,
+  filterCodexFilesByPlan,
+} from '@/utils/quota'
 import type { ApiError } from '@/types'
 
 type ModelItem = { id: string; display_name?: string; type?: string }
@@ -419,6 +433,7 @@ const files = ref<AuthFileItem[]>([])
 const fileInput = ref<HTMLInputElement>()
 const searchQuery = ref('')
 const currentFilter = ref('all')
+const codexPlanFilter = ref(CODEX_PLAN_FILTER_ALL)
 const authFileToggling = ref<Record<string, boolean>>({})
 const removingInvalidCodex = ref(false)
 
@@ -539,6 +554,23 @@ const antigravityFiles = computed(() =>
 
 const codexFiles = computed(() => 
   files.value.filter(f => f.type === 'codex')
+)
+
+const codexPlanOptions = [
+  { value: CODEX_PLAN_FILTER_ALL, label: '全部' },
+  { value: 'free', label: 'free' },
+  { value: 'team', label: 'team' },
+  { value: 'plus', label: 'plus' },
+  { value: 'pro', label: 'pro' },
+  { value: CODEX_PLAN_FILTER_UNKNOWN, label: '未识别' },
+]
+
+const filteredCodexFiles = computed(() =>
+  filterCodexFilesByPlan(codexFiles.value, codexPlanFilter.value)
+)
+
+const displayedCodexFiles = computed(() =>
+  searchFilteredFiles(filteredCodexFiles.value)
 )
 
 const geminiCliFiles = computed(() => 

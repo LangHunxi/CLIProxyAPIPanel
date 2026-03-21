@@ -83,6 +83,9 @@ export const CODEX_REQUEST_HEADERS = {
   'User-Agent': 'codex_cli_rs/0.76.0 (Debian 13.0.0; x86_64) WindowsTerminal'
 }
 
+export const CODEX_PLAN_FILTER_ALL = '__all__'
+export const CODEX_PLAN_FILTER_UNKNOWN = '__unknown__'
+
 // Gemini CLI API (POST method)
 export const GEMINI_CLI_QUOTA_URL = 'https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota'
 
@@ -339,6 +342,26 @@ export function resolveCodexPlanType(file: AuthFileItem): string | null {
   }
 
   return null
+}
+
+export function matchesCodexPlanFilter(file: AuthFileItem, planFilter: string): boolean {
+  const normalizedFilter = normalizeStringValue(planFilter)?.toLowerCase() || CODEX_PLAN_FILTER_ALL
+
+  if (normalizedFilter === CODEX_PLAN_FILTER_ALL) {
+    return true
+  }
+
+  const planType = resolveCodexPlanType(file)
+
+  if (normalizedFilter === CODEX_PLAN_FILTER_UNKNOWN) {
+    return !planType
+  }
+
+  return planType === normalizedFilter
+}
+
+export function filterCodexFilesByPlan(files: AuthFileItem[], planFilter: string): AuthFileItem[] {
+  return files.filter(file => matchesCodexPlanFilter(file, planFilter))
 }
 
 function extractGeminiCliProjectId(value: unknown): string | null {

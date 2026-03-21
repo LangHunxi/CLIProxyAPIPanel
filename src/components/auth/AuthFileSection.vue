@@ -8,53 +8,57 @@
           {{ files.length }}
         </span>
       </div>
-      <div class="flex items-center gap-2">
-        <!-- View Mode Toggle -->
-        <div class="flex items-center gap-1">
-          <Button
-            variant="secondary"
-            size="sm"
-            :class="{ 'bg-primary text-primary-foreground hover:bg-primary/90 shadow-md': viewMode === 'paged', 'hover:bg-primary/10 hover:text-primary hover:scale-105': viewMode !== 'paged' }"
-            class="transition-all duration-200"
-            @click="viewMode = 'paged'"
-          >
-            分页
-          </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            :class="{ 'bg-primary text-primary-foreground hover:bg-primary/90 shadow-md': viewMode === 'all', 'hover:bg-primary/10 hover:text-primary hover:scale-105': viewMode !== 'all' }"
-            class="transition-all duration-200"
-            @click="viewMode = 'all'"
-          >
-            全部
-          </Button>
-        </div>
-        <!-- Refresh Button -->
-        <Button
-          variant="secondary"
-          size="sm"
-          :disabled="refreshing"
-          @click="handleRefresh"
-          title="刷新配额"
-          class="hover:bg-primary/10 hover:text-primary hover:border-primary/30 hover:scale-105 transition-all duration-200"
-        >
-          <RefreshCw class="h-4 w-4" :class="{ 'animate-spin': refreshing }" />
-        </Button>
+      <div class="flex flex-wrap items-center justify-end gap-2">
+        <slot name="header-controls" />
 
-        <template v-if="showRemoveInvalidAction">
-          <div class="h-5 w-px bg-border/80" aria-hidden="true" />
+        <div class="flex items-center gap-2">
+          <!-- View Mode Toggle -->
+          <div class="flex items-center gap-1">
+            <Button
+              variant="secondary"
+              size="sm"
+              :class="{ 'bg-primary text-primary-foreground hover:bg-primary/90 shadow-md': viewMode === 'paged', 'hover:bg-primary/10 hover:text-primary hover:scale-105': viewMode !== 'paged' }"
+              class="transition-all duration-200"
+              @click="viewMode = 'paged'"
+            >
+              分页
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              :class="{ 'bg-primary text-primary-foreground hover:bg-primary/90 shadow-md': viewMode === 'all', 'hover:bg-primary/10 hover:text-primary hover:scale-105': viewMode !== 'all' }"
+              class="transition-all duration-200"
+              @click="viewMode = 'all'"
+            >
+              全部
+            </Button>
+          </div>
+          <!-- Refresh Button -->
           <Button
             variant="secondary"
             size="sm"
-            :disabled="removeInvalidLoading"
-            @click="emit('remove-invalid', props.files)"
-            class="text-destructive hover:bg-destructive/10 hover:text-destructive hover:border-destructive/30 transition-all duration-200"
+            :disabled="refreshing"
+            @click="handleRefresh"
+            title="刷新配额"
+            class="hover:bg-primary/10 hover:text-primary hover:border-primary/30 hover:scale-105 transition-all duration-200"
           >
-            <RefreshCw v-if="removeInvalidLoading" class="h-4 w-4 mr-1 animate-spin" />
-            移除失效凭证
+            <RefreshCw class="h-4 w-4" :class="{ 'animate-spin': refreshing }" />
           </Button>
-        </template>
+
+          <template v-if="showRemoveInvalidAction">
+            <div class="h-5 w-px bg-border/80" aria-hidden="true" />
+            <Button
+              variant="secondary"
+              size="sm"
+              :disabled="removeInvalidLoading"
+              @click="emit('remove-invalid', props.files)"
+              class="text-destructive hover:bg-destructive/10 hover:text-destructive hover:border-destructive/30 transition-all duration-200"
+            >
+              <RefreshCw v-if="removeInvalidLoading" class="h-4 w-4 mr-1 animate-spin" />
+              移除失效凭证
+            </Button>
+          </template>
+        </div>
       </div>
     </div>
 
