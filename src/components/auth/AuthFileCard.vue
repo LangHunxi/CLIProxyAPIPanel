@@ -51,6 +51,18 @@
                 <Button v-if="showModels" variant="ghost" size="icon" class="h-7 w-7 text-muted-foreground hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 hover:scale-110 transition-all duration-200" aria-label="支持模型" title="支持模型" @click="$emit('show-models')">
                   <Bot class="h-3.5 w-3.5" />
                 </Button>
+                <Button
+                  v-if="hasStatusWarning"
+                  variant="ghost"
+                  size="icon"
+                  class="h-7 w-7 text-muted-foreground hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 hover:scale-110 transition-all duration-200"
+                  aria-label="报错信息"
+                  title="报错信息"
+                  data-testid="status-message-button"
+                  @click="statusMessageDialogOpen = true"
+                >
+                  <TriangleAlert class="h-3.5 w-3.5" />
+                </Button>
                 <Button variant="ghost" size="icon" class="h-7 w-7 text-muted-foreground hover:text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 hover:scale-110 transition-all duration-200" aria-label="凭证信息" title="凭证信息" @click="$emit('show-info')">
                   <Info class="h-3.5 w-3.5" />
                 </Button>
@@ -83,13 +95,6 @@
             <span v-if="proxyLabel" class="flex items-center bg-background/50 px-1.5 py-0.5 rounded border border-border/50">
               代理: {{ proxyLabel }}
             </span>
-          </div>
-          <div
-            v-if="hasStatusWarning"
-            class="mt-2 rounded-md border border-red-200/70 bg-red-50/70 px-2 py-1 text-xs text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-300"
-            :title="statusMessage"
-          >
-            上次请求错误: {{ statusMessage }}
           </div>
         </div>
       </div>
@@ -243,6 +248,45 @@
       此类型不支持配额查询
     </div>
 
+    <Dialog v-model:open="statusMessageDialogOpen" size="4xl" noPadding>
+      <div class="overflow-hidden rounded-lg bg-background">
+        <div class="border-b border-red-200/70 bg-gradient-to-r from-red-50 via-background to-amber-50 px-6 py-5 dark:border-red-900/40 dark:from-red-950/40 dark:via-background dark:to-amber-950/20">
+          <div class="flex items-start gap-4">
+            <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-red-100 text-red-600 shadow-sm dark:bg-red-900/30 dark:text-red-300">
+              <TriangleAlert class="h-5 w-5" />
+            </div>
+            <div class="min-w-0">
+              <h3 class="text-lg font-semibold text-foreground">上次报错信息</h3>
+              <p class="mt-1 text-sm text-muted-foreground">
+                查看该凭证最近一次请求失败时返回的原始错误内容。
+              </p>
+            </div>
+          </div>
+        </div>
+        <div class="space-y-4 px-6 py-5">
+          <div class="rounded-2xl border border-border/60 bg-muted/20 px-4 py-3">
+            <div class="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground/80">
+              Credential
+            </div>
+            <div class="mt-1 break-all text-sm font-medium text-foreground">
+              {{ file.name }}
+            </div>
+          </div>
+
+          <div class="overflow-hidden rounded-2xl border border-red-200/70 bg-red-50/50 shadow-sm dark:border-red-900/40 dark:bg-red-950/20">
+            <div class="flex items-center justify-between border-b border-red-200/70 px-4 py-3 dark:border-red-900/30">
+              <span class="text-[11px] font-semibold uppercase tracking-[0.18em] text-red-700 dark:text-red-300">
+                Raw Error
+              </span>
+              <span class="text-xs text-muted-foreground">
+                保留原始换行
+              </span>
+            </div>
+            <pre class="max-h-[65vh] overflow-auto px-4 py-4 text-[13px] leading-6 font-mono text-red-950 whitespace-pre-wrap break-all dark:text-red-50">{{ statusMessage }}</pre>
+          </div>
+        </div>
+      </div>
+    </Dialog>
   </div>
 </template>
 
@@ -258,11 +302,13 @@ import {
   Box, 
   Zap,
   Bot,
+  TriangleAlert,
   Info,
   Pencil
 } from 'lucide-vue-next'
 import Button from '@/components/ui/button.vue'
 import Switch from '@/components/ui/switch.vue'
+import { Dialog } from '@/components/ui/dialog'
 import type { AuthFileItem, AntigravityQuotaState, CodexQuotaState, GeminiCliQuotaState } from '@/types'
 import { TYPE_COLORS, formatQuotaResetTime, resolveCodexPlanType } from '@/utils/quota'
 import { useQuota } from '@/composables/useQuota'
@@ -377,11 +423,16 @@ const statusMessage = computed(() => {
   if (typeof raw !== 'string') return ''
   return raw.trim()
 })
+const statusMessageDialogOpen = ref(false)
 
 const hasStatusWarning = computed(() => {
   const msg = statusMessage.value
   if (!msg) return false
   return !HEALTHY_STATUS_MESSAGES.has(msg.toLowerCase())
+})
+
+watch(statusMessage, () => {
+  statusMessageDialogOpen.value = false
 })
 
 function onToggleEnabled(enabled: boolean) {
