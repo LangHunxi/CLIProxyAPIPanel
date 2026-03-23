@@ -188,7 +188,7 @@ export const useAuthStore = defineStore('auth', () => {
 
     checkingClientUpdate.value = true
     try {
-      const response = await fetch('https://api.github.com/repos/AoaoMH/CLIProxyAPIPanel/releases/latest')
+      const response = await fetch('https://api.github.com/repos/LangHunxi/CLIProxyAPIPanel/releases/latest')
       if (!response.ok) throw new Error('Failed to fetch latest release')
 
       const data = await response.json()
@@ -206,7 +206,7 @@ export const useAuthStore = defineStore('auth', () => {
 
     checkingServerUpdate.value = true
     try {
-      const response = await fetch('https://api.github.com/repos/AoaoMH/CLIProxyAPI-Aoao/releases/latest')
+      const response = await fetch('https://api.github.com/repos/LangHunxi/CLIProxyAPI/releases/latest')
       if (!response.ok) throw new Error('Failed to fetch latest release')
 
       const data = await response.json()

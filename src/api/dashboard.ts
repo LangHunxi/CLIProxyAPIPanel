@@ -226,7 +226,7 @@ export interface DailyStatsResponse {
   }
 }
 
-// 新的统一仪表盘统计接口 (CLIProxyAPI-Aoao /management/dashboard/stats)
+// 新的统一仪表盘统计接口 (CLIProxyAPI /management/dashboard/stats)
 export interface OverviewStats {
   total_requests: number
   success_requests: number
@@ -275,7 +275,7 @@ export const dashboardApi = {
     return apiClient.get<DashboardStatsResponse>('/api/dashboard/stats')
   },
 
-  // 获取统一的仪表盘统计数据 (新接口,用于 CLIProxyAPI-Aoao 后端)
+  // 获取统一的仪表盘统计数据 (新接口,用于 CLIProxyAPI 后端)
   async getUnifiedStats(days: number = 7): Promise<UnifiedDashboardStats> {
     return apiClient.get<UnifiedDashboardStats>('/dashboard/stats', {
       params: { days }
