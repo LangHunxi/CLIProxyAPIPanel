@@ -268,7 +268,7 @@
       @update:open="(v) => (v ? null : closeEditModal())"
       size="md"
       :title="editModal.target?.name ? `快捷修改 - ${editModal.target.name}` : '快捷修改'"
-      description="快速修改 OAuth 凭证文件的 proxy/prefix（写入 JSON 文件）"
+      description="快速修改 OAuth 凭证文件的 proxy/prefix/user-agent（写入 JSON 文件）"
     >
       <div class="space-y-4">
         <div v-if="editModal.loading" class="py-8 text-center text-muted-foreground">
@@ -310,6 +310,18 @@
             />
             <div class="text-xs text-muted-foreground">
               写入字段：<code class="font-mono">prefix</code>（不能包含 <code class="font-mono">/</code>）
+            </div>
+          </div>
+
+          <div v-if="editModal.target?.type === 'antigravity'" class="space-y-1">
+            <label class="text-sm font-medium text-foreground mb-1 block">User-Agent（可选）</label>
+            <Input
+              v-model="editModal.form.userAgent"
+              placeholder="antigravity/1.11.5 windows/amd64"
+              :disabled="editModal.saving"
+            />
+            <div class="text-xs text-muted-foreground">
+              写入字段：<code class="font-mono">user_agent</code>，留空则使用默认值
             </div>
           </div>
 
@@ -498,7 +510,8 @@ const editModal = reactive({
   form: {
     name: '',
     proxyUrl: '',
-    prefix: ''
+    prefix: '',
+    userAgent: ''
   }
 })
 
@@ -1225,6 +1238,7 @@ async function openEditModal(file: AuthFileItem) {
   editModal.form.name = (file as any).name ?? ''
   editModal.form.proxyUrl = (file as any).proxy_url ?? (file as any).proxyUrl ?? ''
   editModal.form.prefix = (file as any).prefix ?? ''
+  editModal.form.userAgent = (file as any).user_agent ?? ''
 
   try {
     const response = await apiClient.getRaw(`/auth-files/download?name=${encodeURIComponent(file.name)}`)
@@ -1236,6 +1250,7 @@ async function openEditModal(file: AuthFileItem) {
     editModal.form.name = typeof json.name === 'string' ? json.name : ''
     editModal.form.proxyUrl = typeof json.proxy_url === 'string' ? json.proxy_url : ''
     editModal.form.prefix = typeof json.prefix === 'string' ? json.prefix : ''
+    editModal.form.userAgent = typeof json.user_agent === 'string' ? json.user_agent : ''
   } catch (err) {
     editModal.error = err instanceof Error ? err.message : '读取凭证文件失败'
   } finally {
@@ -1253,6 +1268,7 @@ function closeEditModal() {
   editModal.form.name = ''
   editModal.form.proxyUrl = ''
   editModal.form.prefix = ''
+  editModal.form.userAgent = ''
 }
 
 async function saveEditModal() {
@@ -1263,6 +1279,7 @@ async function saveEditModal() {
   const displayName = editModal.form.name.trim()
   const proxyUrl = editModal.form.proxyUrl.trim()
   const prefixRaw = editModal.form.prefix.trim().replace(/^\/+|\/+$/g, '')
+  const userAgent = editModal.form.userAgent.trim()
 
   if (prefixRaw.includes('/')) {
     editModal.error = 'Prefix 不能包含 /'
@@ -1279,7 +1296,8 @@ async function saveEditModal() {
         name,
         display_name: displayName,
         proxy_url: proxyUrl,
-        prefix: prefixRaw
+        prefix: prefixRaw,
+        user_agent: userAgent
       })
     } catch (err) {
       const status = (err as any)?.status as number | undefined
@@ -1299,6 +1317,9 @@ async function saveEditModal() {
 
       if (prefixRaw) (json as any).prefix = prefixRaw
       else delete (json as any).prefix
+
+      if (userAgent) (json as any).user_agent = userAgent
+      else delete (json as any).user_agent
 
       await apiClient.post(`/auth-files?name=${encodeURIComponent(name)}`, JSON.stringify(json), {
         headers: { 'Content-Type': 'application/json' }

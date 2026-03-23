@@ -480,6 +480,15 @@ export function useQuota(file: AuthFileItem) {
     let priorityStatus: number | undefined
     let hadSuccess = false
 
+    const fileAny = file as Record<string, unknown>
+    const customUserAgent = typeof fileAny.user_agent === 'string' && fileAny.user_agent.trim()
+      ? fileAny.user_agent.trim()
+      : null
+    const requestHeaders: Record<string, string> = {
+      ...ANTIGRAVITY_REQUEST_HEADERS,
+      ...(customUserAgent ? { 'User-Agent': customUserAgent } : {})
+    }
+
     for (const url of ANTIGRAVITY_QUOTA_URLS) {
       for (let attempt = 0; attempt < requestBodies.length; attempt++) {
         try {
@@ -487,7 +496,7 @@ export function useQuota(file: AuthFileItem) {
             authIndex,
             method: 'POST',
             url,
-            header: { ...ANTIGRAVITY_REQUEST_HEADERS },
+            header: requestHeaders,
             data: requestBodies[attempt]
           })
 
